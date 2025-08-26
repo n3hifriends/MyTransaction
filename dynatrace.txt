@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ======== CONFIG ========
+: "${DT_URL:?Set your Dynatrace URL, e.g. https://abc12345.live.dynatrace.com}"
+: "${DT_TOKEN:?Set your Dynatrace API token with entities.read scope}"
+MZ_NAME="${MZ_NAME:-}"               # e.g. "Production"
+TIME_FROM="${TIME_FROM:-now-7d}"
+TIME_TO="${TIME_TO:-}"
+PAGE_SIZE="${PAGE_SIZE:-500}"
+OUTDIR="${OUTDIR:-dt_export}"
+FIELDS="${FIELDS:-+properties,+tags,+managementZones,+fromRelationships,+toRelationships,+lastSeenTms}"
+
+# Which entity types to fetch (add APPLICATION if you want UI/frontends)
+ENTITY_TYPES="${ENTITY_TYPES:-HOST,PROCESS_GROUP,SERVICE}"
+
+# Draw.io layout params
+NODE_W="${NODE_W:-180}"
+NODE_H="${NODE_H:-60}"
+GUTTER_X="${GUTTER_X:-240}"
+GUTTER_Y="${GUTTER_Y:-30}"
+PAD_X="${PAD_X:-40}"
+PAD_Y="${PAD_Y:-40}"
+
+# Column order (left -> right). Must match entity "type" values.
+COL_ORDER="${COL_ORDER:-HOST,PROCESS_GROUP,SERVICE}"
+
+# ======== Helpers ========
+have_jq(){ command -v jq >/dev/null 2>&1; }
+err(){ printf "\033[31m[err] %s\033[0m\n" "$*" >&2; }
+hdr(){ printf "\n\033[1;36m== %s ==\033[0m\n" "$*"; }
+
+api(){
+  curl -sfSL -H "Authorization: Api-Token ${DT_TOKEN}" "$@" "${DT_URL}$1"
+}
+
+fetch_entities() {
+  local type="$1"
+  local selector="type(\"$type\")"
+  if [[ -n "$MZ_NAME" ]]; then
+    selector="$selector,mzName(\"$MZ_NAME\")"
+  fi
+
+  local base="/api/v2/entities"
+  local qp="entitySelector=$(printf '%s' "$selector" | jq -sRr @uri)&pageSize=$PAGE_SIZE&fields=$(printf '%s' "$FIELDS" | jq -sRr @uri)"
+  [[ -n "$TIME_FROM" ]] && qp="$qp&from=$(printf '%s' "$TIME_FROM" | jq -sRr @uri)"
+  [[ -n "$TIME_TO" ]] && qp="$qp&to=$(printf '%s' "$TIME_TO" | jq -sRr @uri)"
+
+  local out="$OUTDIR/raw/${type}.jsonl"
+  : > "$out"
+
+  hdr "Fetching $type"
+  local resp
+  resp="$(api "$base?$qp")" || { err "Initial fetch failed for $type"; return 1; }
+  printf '%s\n' "$resp" | jq -c '.entities[]?' >> "$out" || true
+
+  local next
+  next="$(printf '%s' "$resp" | jq -r '.nextPageKey // empty' || true)"
+  while [[ -n "$next" && "$next" != "null" ]]; do
+    resp="$(api "$base?nextPageKey=$(printf '%s' "$next" | jq -sRr @uri)")" || { err "Pagination failed for $type"; break; }
+    printf '%s\n' "$resp" | jq -c '.entities[]?' >> "$out" || true
+    next="$(printf '%s' "$resp" | jq -r '.nextPageKey // empty' || true)"
+  done
+  printf "[ok] Saved %s entities → %s\n" "$type" "$out"
+}
+
+build_nodes_edges_csv() {
+  hdr "Building nodes.csv / edges.csv"
+  printf 'id,type,name,zone,tags\n' > "$OUTDIR/nodes.csv"
+  printf 'srcId,rel,dstId\n' > "$OUTDIR/edges.csv"
+
+  cat "$OUTDIR"/raw/*.jsonl 2>/dev/null | jq -r '
+    . as $e |
+    [
+      $e.entityId,
+      $e.type,
+      ($e.displayName // $e.entityId),
+      (([$e.managementZones[]?.name] | join("|")) // ""),
+      (([$e.tags[]?.stringRepresentation] | join("|")) // "")
+    ] | @csv
+  ' >> "$OUTDIR/nodes.csv"
+
+  # toRelationships (e -> target)
+  cat "$OUTDIR"/raw/*.jsonl 2>/dev/null | jq -r '
+    . as $e |
+    ($e.toRelationships // {}) | to_entries[]? as $t |
+    $t.value[]? | [$e.entityId, $t.key, .id] | @csv
+  ' >> "$OUTDIR/edges.csv"
+
+  # fromRelationships (origin -> e)  (normalize to origin -> target)
+  cat "$OUTDIR"/raw/*.jsonl 2>/dev/null | jq -r '
+    . as $e |
+    ($e.fromRelationships // {}) | to_entries[]? as $t |
+    $t.value[]? | [.id, $t.key, $e.entityId] | @csv
+  ' >> "$OUTDIR/edges.csv"
+
+  printf "[ok] nodes.csv and edges.csv created in %s\n" "$OUTDIR"
+}
+
+build_drawio() {
+  hdr "Building topology.drawio (native XML)"
+  local xml="$OUTDIR/topology.drawio"
+  local tmp_nodes="$OUTDIR/.nodes.enriched.jsonl"
+  : > "$tmp_nodes"
+
+  # Build a map of type -> column index
+  IFS=',' read -r -a cols <<< "$COL_ORDER"
+  declare -A COL_INDEX=()
+  for i in "${!cols[@]}"; do COL_INDEX["${cols[$i]}"]="$i"; done
+
+  # Enrich nodes with col/row & coordinates
+  # We’ll place nodes by their type column; rows increment as we go.
+  # To get stable rows, sort nodes by name within each column.
+  # Produce json lines: {"id":..,"name":..,"type":..,"x":..,"y":..}
+  if ! have_jq; then
+    err "jq is required for draw.io generation."
+    return 1
+  fi
+
+  # Split nodes by column, sort by name
+  for t in "${cols[@]}"; do
+    grep -F ",$t," "$OUTDIR/nodes.csv" || true
+  done >/dev/null 2>&1
+
+  # Create per-column node lists
+  for t in "${cols[@]}"; do
+    awk -F, -v want="$t" 'NR==1{next} $2==want{print}' "$OUTDIR/nodes.csv" | sort -t, -k3,3 > "$OUTDIR/.col_${t}.csv" || true
+  done
+
+  # Assign coordinates
+  for t in "${cols[@]}"; do
+    row=0
+    while IFS=, read -r id type name zone tags; do
+      # strip surrounding quotes from CSV fields
+      id="${id%\"}"; id="${id#\"}"
+      type="${type%\"}"; type="${type#\"}"
+      name="${name%\"}"; name="${name#\"}"
+      col_idx="${COL_INDEX[$type]:-0}"
+      x=$(( PAD_X + col_idx * GUTTER_X ))
+      y=$(( PAD_Y + row * (GUTTER_Y + NODE_H) ))
+      printf '{"id":"%s","name":"%s","type":"%s","x":%d,"y":%d}\n' \
+        "$id" "$(printf '%s' "$name" | sed 's/"/\\"/g')" "$type" "$x" "$y" >> "$tmp_nodes"
+      row=$((row+1))
+    done < "$OUTDIR/.col_${t}.csv"
+  done
+
+  # Start XML
+  {
+    echo '<mxfile host="DynatraceExporter" modified="'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'" agent="bash" version="22.0.0">'
+    echo '  <diagram name="Dynatrace Topology">'
+    echo '    <mxGraphModel>'
+    echo '      <root>'
+    echo '        <mxCell id="0"/><mxCell id="1" parent="0"/>'
+  } > "$xml"
+
+  # Write node cells
+  nid=100
+  while read -r line; do
+    id=$(jq -r '.id' <<<"$line")
+    name=$(jq -r '.name' <<<"$line")
+    type=$(jq -r '.type' <<<"$line")
+    x=$(jq -r '.x' <<<"$line")
+    y=$(jq -r '.y' <<<"$line")
+    label="${name//&/&amp;}"
+    label="${label//</&lt;}"
+    label="${label//>/&gt;}"
+    label="${label//\"/&quot;}"
+    echo "        <mxCell id=\"$id\" value=\"$label&#10;($type)\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;\" vertex=\"1\" parent=\"1\">" >> "$xml"
+    echo "          <mxGeometry x=\"$x\" y=\"$y\" width=\"$NODE_W\" height=\"$NODE_H\" as=\"geometry\"/>" >> "$xml"
+    echo "        </mxCell>" >> "$xml"
+    nid=$((nid+1))
+  done < "$tmp_nodes"
+
+  # Build a set of valid node IDs for edge validation
+  mapfile -t NODE_IDS < <(jq -r '.id' "$tmp_nodes")
+
+  # Edges (filter to only connect nodes that exist in our layout)
+  while IFS=, read -r src rel dst; do
+    [[ "$src" == "srcId" ]] && continue
+    src="${src%\"}"; src="${src#\"}"
+    dst="${dst%\"}"; dst="${dst#\"}"
+    # only if both ends exist
+    if printf '%s\n' "${NODE_IDS[@]}" | grep -qx "$src" && printf '%s\n' "${NODE_IDS[@]}" | grep -qx "$dst"; then
+      elabel="${rel//&/&amp;}"; elabel="${elabel//</&lt;}"; elabel="${elabel//>/&gt;}"; elabel="${elabel//\"/&quot;}"
+      echo "        <mxCell id=\"e-${src}-${dst}\" value=\"$elabel\" edge=\"1\" parent=\"1\" source=\"$src\" target=\"$dst\">" >> "$xml"
+      echo "          <mxGeometry relative=\"1\" as=\"geometry\"/>" >> "$xml"
+      echo "        </mxCell>" >> "$xml"
+    fi
+  done < "$OUTDIR/edges.csv"
+
+  # Close XML
+  {
+    echo '      </root>'
+    echo '    </mxGraphModel>'
+    echo '  </diagram>'
+    echo '</mxfile>'
+  } >> "$xml"
+
+  printf "[ok] %s\n" "$xml"
+  printf "Open in draw.io and use Arrange → Layout to auto-tidy if needed.\n"
+}
+
+main() {
+  have_jq || { err "jq is required (brew install jq / apt-get install jq)"; exit 1; }
+  mkdir -p "$OUTDIR/raw"
+
+  IFS=',' read -r -a TYPES <<< "$ENTITY_TYPES"
+  for t in "${TYPES[@]}"; do fetch_entities "$t"; done
+
+  build_nodes_edges_csv
+  build_drawio
+
+  # Cleanup temp files
+  rm -f "$OUTDIR"/.col_*.csv "$OUTDIR/.nodes.enriched.jsonl" || true
+
+  hdr "Done. Open: $OUTDIR/topology.drawio"
+}
+
+main "$@"
+------//////-------
+chmod +x dynatrace-to-drawio.sh
+
+# Basic (last 7 days)
+DT_URL="https://<your-env-id>.live.dynatrace.com" \
+DT_TOKEN="dt0c01.xxxxxx" \
+./dynatrace-to-drawio.sh
+
+# Narrow to your Production management zone & include Applications too
+DT_URL="https://<your-env-id>.live.dynatrace.com" \
+DT_TOKEN="dt0c01.xxxxxx" \
+MZ_NAME="Production" \
+ENTITY_TYPES="HOST,PROCESS_GROUP,SERVICE,APPLICATION" \
+COL_ORDER="HOST,PROCESS_GROUP,SERVICE,APPLICATION" \
+./dynatrace-to-drawio.sh
