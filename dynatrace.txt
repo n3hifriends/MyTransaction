@@ -1,1 +1,7 @@
 https://dynatrace.godigit.com/e/7bc76e8d-f3c2-4c06-ba65-02b4e2449fb8/#smartscape;layer=APPLICATIONS;id=MOBILE_APPLICATION-3F79A7C86E0347B2;gf=all
+curl --globoff -sS -G \
+  -H "Authorization: Api-Token dt0c01.xxxxxx" \
+  "https://dynatrace.godigit.com/e/7bc76e8d-f3c2-4c06-ba65-02b4e2449fb8/api/v2/entities" \
+  --data-urlencode 'entitySelector=entityId("MOBILE_APPLICATION-3F79A7C86E0347B2")' \
+  --data-urlencode 'fields=+fromRelationships,+toRelationships,+properties,+tags' \
+  --data-urlencode 'pageSize=5' | jq .
