@@ -232,3 +232,224 @@ MZ_NAME="Production" \
 ENTITY_TYPES="HOST,PROCESS_GROUP,SERVICE,APPLICATION" \
 COL_ORDER="HOST,PROCESS_GROUP,SERVICE,APPLICATION" \
 ./dynatrace-to-drawio.sh
+
+
+-------
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ====== USER CONFIG ======
+# Provide ONE of the following:
+#   1) DT_URL     -> full base, e.g. https://abc12345.live.dynatrace.com
+#   2) DT_ENV_ID  -> env id like abc12345 (SaaS). We will try live/apps bases.
+#   3) DT_GATEWAY -> Managed ActiveGate base like https://ag.myco:9999 and DT_ENV_ID for /e/<env>
+: "${DT_TOKEN:?Set DT_TOKEN=dt0c01.xxxxx with entities.read}"
+DT_URL="${DT_URL:-}"
+DT_ENV_ID="${DT_ENV_ID:-}"
+DT_GATEWAY="${DT_GATEWAY:-}"
+
+# Scope/time (optional)
+ENTITY_TYPES="${ENTITY_TYPES:-HOST,PROCESS_GROUP,SERVICE}"
+ENTITY_SELECTOR_OVERRIDE="${ENTITY_SELECTOR_OVERRIDE:-}"   # e.g. type("SERVICE"),tag("owner:team-x")
+TIME_FROM="${TIME_FROM:-now-7d}"
+TIME_TO="${TIME_TO:-}"
+PAGE_SIZE="${PAGE_SIZE:-500}"
+
+# Draw.io layout
+NODE_W="${NODE_W:-180}"; NODE_H="${NODE_H:-60}"
+GUTTER_X="${GUTTER_X:-240}"; GUTTER_Y="${GUTTER_Y:-30}"
+PAD_X="${PAD_X:-40}"; PAD_Y="${PAD_Y:-40}"
+COL_ORDER="${COL_ORDER:-HOST,PROCESS_GROUP,SERVICE}"
+
+OUTDIR="${OUTDIR:-dt_export}"
+FIELDS="${FIELDS:-+properties,+tags,+managementZones,+fromRelationships,+toRelationships,+lastSeenTms}"
+
+# ====== UTIL ======
+die(){ echo -e "\033[31m[err]\033[0m $*" >&2; exit 1; }
+note(){ echo -e "\033[36m[info]\033[0m $*"; }
+have(){ command -v "$1" >/dev/null 2>&1; }
+
+api() {
+  local url="$1"; shift || true
+  local body_file code
+  body_file="$(mktemp)"
+  code="$(curl -sS -o "$body_file" -w '%{http_code}' -H "Authorization: Api-Token ${DT_TOKEN}" "$url" "$@" || true)"
+  if [[ -z "${code:-}" ]]; then
+    echo "[err] No HTTP code from $url" >&2; head -c 400 "$body_file" >&2 || true; rm -f "$body_file"; return 1
+  fi
+  if (( code >= 400 )); then
+    echo "[err] HTTP $code for $url" >&2; head -c 800 "$body_file" >&2 || true; echo >&2; rm -f "$body_file"; return 1
+  fi
+  cat "$body_file"; rm -f "$body_file"
+}
+
+# ====== PREFLIGHT: determine a working Environment API base ======
+pick_base() {
+  # If DT_URL provided, try it as-is.
+  if [[ -n "$DT_URL" ]]; then
+    note "Trying DT_URL=$DT_URL"
+    api "${DT_URL%/}/api/v2/entityTypes" >/dev/null && { echo "${DT_URL%/}"; return; }
+    die "DT_URL ($DT_URL) didn’t work for /api/v2/entityTypes (404/401/… see error above)."
+  fi
+
+  # If Managed via ActiveGate base is provided, require DT_ENV_ID and build /e/<env-id>
+  if [[ -n "$DT_GATEWAY" && -n "$DT_ENV_ID" ]]; then
+    local base="${DT_GATEWAY%/}/e/${DT_ENV_ID}"
+    note "Trying Managed ActiveGate base: $base"
+    api "$base/api/v2/entityTypes" >/dev/null && { echo "$base"; return; }
+    die "ActiveGate base ($base) didn’t work."
+  fi
+
+  # If only env id is given, try SaaS candidates.
+  if [[ -n "$DT_ENV_ID" ]]; then
+    local candidates=(
+      "https://${DT_ENV_ID}.live.dynatrace.com"
+      # Some orgs look at apps.* in the browser, but Environment API v2 is still on live.*
+      # We try apps.* just in case the tenant proxies it:
+      "https://${DT_ENV_ID}.apps.dynatrace.com"
+    )
+    for c in "${candidates[@]}"; do
+      note "Trying $c"
+      if api "$c/api/v2/entityTypes" >/dev/null; then echo "$c"; return; fi
+    done
+    die "Couldn’t reach a working Environment API for env id ($DT_ENV_ID). Supply DT_URL instead."
+  fi
+
+  die "Please set DT_URL (preferred), or DT_ENV_ID, or DT_GATEWAY+DT_ENV_ID."
+}
+
+# ====== FETCH ======
+fetch_entities() {
+  local base="$1" type="$2"
+  local selector
+  if [[ -n "$ENTITY_SELECTOR_OVERRIDE" ]]; then
+    selector="$ENTITY_SELECTOR_OVERRIDE"
+  else
+    selector="type(\"$type\")"
+  fi
+
+  local url="$base/api/v2/entities"
+  local qs="entitySelector=$(printf '%s' "$selector" | jq -sRr @uri)&pageSize=$PAGE_SIZE&fields=$(printf '%s' "$FIELDS" | jq -sRr @uri)"
+  [[ -n "$TIME_FROM" ]] && qs="$qs&from=$(printf '%s' "$TIME_FROM" | jq -sRr @uri)"
+  [[ -n "$TIME_TO" ]]   && qs="$qs&to=$(printf '%s' "$TIME_TO"   | jq -sRr @uri)"
+
+  local out="$OUTDIR/raw/${type}.jsonl"; : > "$out"
+  note "Fetching $type (selector: $selector)"
+  local resp next
+  resp="$(api "$url?$qs")" || die "Initial fetch failed for $type"
+  printf '%s\n' "$resp" | jq -c '.entities[]?' >> "$out" || true
+  next="$(printf '%s' "$resp" | jq -r '.nextPageKey // empty' || true)"
+  while [[ -n "$next" && "$next" != "null" ]]; do
+    resp="$(api "$url?nextPageKey=$(printf '%s' "$next" | jq -sRr @uri)")" || break
+    printf '%s\n' "$resp" | jq -c '.entities[]?' >> "$out" || true
+    next="$(printf '%s' "$resp" | jq -r '.nextPageKey // empty' || true)"
+  done
+  note "Saved $(wc -l < "$out" | tr -d ' ') $type entities → $out"
+}
+
+build_nodes_edges_csv() {
+  note "Building nodes.csv / edges.csv"
+  printf 'id,type,name,zone,tags\n' > "$OUTDIR/nodes.csv"
+  printf 'srcId,rel,dstId\n' > "$OUTDIR/edges.csv"
+
+  cat "$OUTDIR"/raw/*.jsonl 2>/dev/null | jq -r '
+    . as $e |
+    [
+      $e.entityId,
+      $e.type,
+      ($e.displayName // $e.entityId),
+      (([$e.managementZones[]?.name] | join("|")) // ""),
+      (([$e.tags[]?.stringRepresentation] | join("|")) // "")
+    ] | @csv
+  ' >> "$OUTDIR/nodes.csv"
+
+  # toRelationships: e -> target
+  cat "$OUTDIR"/raw/*.jsonl 2>/dev/null | jq -r '
+    . as $e | ($e.toRelationships // {}) | to_entries[]? as $t
+    | $t.value[]? | [$e.entityId, $t.key, .id] | @csv
+  ' >> "$OUTDIR/edges.csv"
+
+  # fromRelationships: origin -> e (normalize to origin -> target)
+  cat "$OUTDIR"/raw/*.jsonl 2>/dev/null | jq -r '
+    . as $e | ($e.fromRelationships // {}) | to_entries[]? as $t
+    | $t.value[]? | [.id, $t.key, $e.entityId] | @csv
+  ' >> "$OUTDIR/edges.csv"
+}
+
+build_drawio() {
+  note "Building topology.drawio"
+  local xml="$OUTDIR/topology.drawio"
+  local tmp_nodes="$OUTDIR/.nodes.enriched.jsonl"; : > "$tmp_nodes"
+
+  IFS=',' read -r -a cols <<< "$COL_ORDER"
+  declare -A COL_INDEX=()
+  for i in "${!cols[@]}"; do COL_INDEX["${cols[$i]}"]="$i"; done
+
+  # Per-column sorted node lists
+  for t in "${cols[@]}"; do
+    awk -F, -v want="$t" 'NR==1{next} $2==want{print}' "$OUTDIR/nodes.csv" | sort -t, -k3,3 > "$OUTDIR/.col_${t}.csv" || true
+  done
+
+  # Assign coordinates and emit enriched JSON
+  for t in "${cols[@]}"; do
+    row=0
+    while IFS=, read -r id type name zone tags; do
+      [[ -z "${id:-}" ]] && continue
+      id="${id%\"}"; id="${id#\"}"; type="${type%\"}"; type="${type#\"}"
+      name="${name%\"}"; name="${name#\"}"
+      col_idx="${COL_INDEX[$type]:-0}"
+      x=$(( PAD_X + col_idx * GUTTER_X ))
+      y=$(( PAD_Y + row * (GUTTER_Y + NODE_H) ))
+      printf '{"id":"%s","name":"%s","type":"%s","x":%d,"y":%d}\n' \
+        "$id" "$(printf '%s' "$name" | sed 's/"/\\"/g')" "$type" "$x" "$y" >> "$tmp_nodes"
+      row=$((row+1))
+    done < "$OUTDIR/.col_${t}.csv"
+  done
+
+  {
+    echo '<mxfile host="DynatraceExporter" modified="'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'" agent="bash" version="22.0.0">'
+    echo '  <diagram name="Dynatrace Topology">'
+    echo '    <mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+  } > "$xml"
+
+  # Nodes
+  while read -r line; do
+    id=$(jq -r '.id' <<<"$line"); name=$(jq -r '.name' <<<"$line")
+    type=$(jq -r '.type' <<<"$line"); x=$(jq -r '.x' <<<"$line"); y=$(jq -r '.y' <<<"$line")
+    label="${name//&/&amp;}"; label="${label//</&lt;}"; label="${label//>/&gt;}"; label="${label//\"/&quot;}"
+    echo "      <mxCell id=\"$id\" value=\"$label&#10;($type)\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"$x\" y=\"$y\" width=\"$NODE_W\" height=\"$NODE_H\" as=\"geometry\"/></mxCell>" >> "$xml"
+  done < "$tmp_nodes"
+
+  # Edge filter: only connect nodes we placed
+  mapfile -t NODE_IDS < <(jq -r '.id' "$tmp_nodes")
+  while IFS=, read -r src rel dst; do
+    [[ "$src" == "srcId" ]] && continue
+    src="${src%\"}"; src="${src#\"}"; dst="${dst%\"}"; dst="${dst#\"}"
+    if printf '%s\n' "${NODE_IDS[@]}" | grep -qx "$src" && printf '%s\n' "${NODE_IDS[@]}" | grep -qx "$dst"; then
+      elabel="${rel//&/&amp;}"; elabel="${elabel//</&lt;}"; elabel="${elabel//>/&gt;}"; elabel="${elabel//\"/&quot;}"
+      echo "      <mxCell id=\"e-${src}-${dst}\" value=\"$elabel\" edge=\"1\" parent=\"1\" source=\"$src\" target=\"$dst\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>" >> "$xml"
+    fi
+  done < "$OUTDIR/edges.csv"
+
+  echo '    </root></mxGraphModel></diagram></mxfile>' >> "$xml"
+  note "Wrote $xml  (Open in draw.io → Arrange → Layout to tidy)"
+}
+
+main() {
+  have jq || die "Please install jq"
+  mkdir -p "$OUTDIR/raw"
+
+  local BASE; BASE="$(pick_base)"
+  note "Using Environment API base: $BASE"
+
+  IFS=',' read -r -a TYPES <<< "$ENTITY_TYPES"
+  for t in "${TYPES[@]}"; do fetch_entities "$BASE" "$t"; done
+
+  build_nodes_edges_csv
+  build_drawio
+
+  rm -f "$OUTDIR"/.col_*.csv "$OUTDIR/.nodes.enriched.jsonl" || true
+  note "Done. Outputs in $OUTDIR/"
+}
+
+main "$@"
