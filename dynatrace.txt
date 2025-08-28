@@ -454,3 +454,40 @@ main() {
 
 main "$@"
 https://dynatrace.godigit.com/e/7bc76e8d-f3c2-4c06-ba65-02b4e2449fb8/#smartscape;id=MOBILE_APPLICATION-5AD84A50E1B5405F;gtf=-2h;gf=all
+fetch_entities() {
+  local base="$1" type="$2"
+  local selector
+  if [[ -n "${ENTITY_SELECTOR_OVERRIDE:-}" ]]; then
+    selector="$ENTITY_SELECTOR_OVERRIDE"
+  else
+    selector="type(\"$type\")"
+  fi
+
+  local url="${base%/}/api/v2/entities"
+  local out="$OUTDIR/raw/${type}.jsonl"; : > "$out"
+
+  echo "[info] Fetching $type (selector: $selector)"
+
+  # first page
+  local resp
+  resp="$(api "$url" -G \
+          --data-urlencode "entitySelector=$selector" \
+          --data-urlencode "pageSize=${PAGE_SIZE:-500}" \
+          --data-urlencode "fields=${FIELDS:-+properties,+tags,+managementZones,+fromRelationships,+toRelationships,+lastSeenTms}" \
+          ${TIME_FROM:+--data-urlencode "from=$TIME_FROM"} \
+          ${TIME_TO:+--data-urlencode "to=$TIME_TO"})" \
+    || { echo "[err] Initial fetch failed for $type"; return 1; }
+
+  printf '%s\n' "$resp" | jq -c '.entities[]?' >> "$out" || true
+
+  # paginate using nextPageKey (must be urlencoded too)
+  local next
+  next="$(printf '%s' "$resp" | jq -r '.nextPageKey // empty' || true)"
+  while [[ -n "$next" && "$next" != "null" ]]; do
+    resp="$(api "$url" -G --data-urlencode "nextPageKey=$next")" || break
+    printf '%s\n' "$resp" | jq -c '.entities[]?' >> "$out" || true
+    next="$(printf '%s' "$resp" | jq -r '.nextPageKey // empty' || true)"
+  done
+
+  echo "[ok] Saved $(wc -l < "$out" | tr -d ' ') $type entities → $out"
+}
