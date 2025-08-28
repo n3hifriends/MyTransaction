@@ -1,7 +1,223 @@
-https://dynatrace.godigit.com/e/7bc76e8d-f3c2-4c06-ba65-02b4e2449fb8/#smartscape;layer=APPLICATIONS;id=MOBILE_APPLICATION-3F79A7C86E0347B2;gf=all
-curl --globoff -sS -G \
-  -H "Authorization: Api-Token dt0c01.xxxxxx" \
-  "https://dynatrace.godigit.com/e/7bc76e8d-f3c2-4c06-ba65-02b4e2449fb8/api/v2/entities" \
-  --data-urlencode 'entitySelector=entityId("MOBILE_APPLICATION-3F79A7C86E0347B2")' \
-  --data-urlencode 'fields=+fromRelationships,+toRelationships,+properties,+tags' \
-  --data-urlencode 'pageSize=5' | jq .
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ======== CONFIG ========
+: "${DT_URL:?Example: https://dynatrace.example.com/e/<env-id>}"
+: "${DT_TOKEN:?Dynatrace API token with entities.read}"
+: "${SEED_IDS:?Comma-separated entityIds, e.g. MOBILE_APPLICATION-ABC,...}"
+
+OUTDIR="${OUTDIR:-dt_export}"
+PAGE_SIZE="${PAGE_SIZE:-500}"
+FIELDS="${FIELDS:-+properties,+tags,+managementZones,+fromRelationships,+toRelationships,+lastSeenTms}"
+# draw.io layout
+COL_ORDER="${COL_ORDER:-MOBILE_APPLICATION,APPLICATION,SERVICE,EXTERNAL_SERVICE,DATABASE_SERVICE,PROCESS_GROUP,HOST,CUSTOM_DEVICE,PROCESS_GROUP_INSTANCE}"
+NODE_W="${NODE_W:-180}"; NODE_H="${NODE_H:-60}"
+GUTTER_X="${GUTTER_X:-240}"; GUTTER_Y="${GUTTER_Y:-30}"
+PAD_X="${PAD_X:-40}"; PAD_Y="${PAD_Y:-40}"
+
+mkdir -p "$OUTDIR/raw"
+
+api_get() {
+  # GET with url-encoded params; prints body or errors with HTTP code
+  local url="$1"; shift || true
+  local body_file code
+  body_file="$(mktemp)"
+  code="$(curl --globoff -sS -o "$body_file" -w '%{http_code}' \
+               -H "Authorization: Api-Token ${DT_TOKEN}" \
+               "$url" "$@" || true)"
+  if [[ -z "${code:-}" || "$code" -ge 400 ]]; then
+    echo "[err] HTTP ${code:-<none>} $url" >&2
+    head -c 800 "$body_file" >&2 || true; echo >&2
+    rm -f "$body_file"; return 1
+  fi
+  cat "$body_file"; rm -f "$body_file"
+}
+
+fetch_by_selector() {
+  local selector="$1"
+  local url="${DT_URL%/}/api/v2/entities"
+  local out="$2"; : > "$out"
+  # first page
+  local resp next
+  resp="$(api_get "$url" -G \
+          --data-urlencode "entitySelector=$selector" \
+          --data-urlencode "pageSize=$PAGE_SIZE" \
+          --data-urlencode "fields=$FIELDS")"
+  printf '%s\n' "$resp" | jq -c '.entities[]?' >> "$out" || true
+  next="$(printf '%s' "$resp" | jq -r '.nextPageKey // empty' || true)"
+  # paginate
+  while [[ -n "$next" && "$next" != "null" ]]; do
+    resp="$(api_get "$url" -G --data-urlencode "nextPageKey=$next")" || break
+    printf '%s\n' "$resp" | jq -c '.entities[]?' >> "$out" || true
+    next="$(printf '%s' "$resp" | jq -r '.nextPageKey // empty' || true)"
+  done
+}
+
+uniq_lines() { awk '!seen[$0]++'; }
+
+chunk_ids() {
+  # splits stdin list of ids into chunks of N (default 20)
+  local n="${1:-20}" buf=() count=0 line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    buf+=("$line"); count=$((count+1))
+    if (( count==n )); then printf '%s\n' "${buf[@]}"; echo "---"; buf=(); count=0; fi
+  done
+  if (( count>0 )); then printf '%s\n' "${buf[@]}"; echo "---"; fi
+}
+
+# ====== 1) SEED PULL ======
+SEED_SELECTOR=""
+IFS=',' read -r -a seed_arr <<< "$SEED_IDS"
+for sid in "${seed_arr[@]}"; do
+  [[ -n "$SEED_SELECTOR" ]] && SEED_SELECTOR+=","
+  SEED_SELECTOR+="entityId(\"$sid\")"
+done
+
+echo "[info] Seed selector: $SEED_SELECTOR"
+fetch_by_selector "$SEED_SELECTOR" "$OUTDIR/raw/_seed.jsonl"
+
+if [[ ! -s "$OUTDIR/raw/_seed.jsonl" ]]; then
+  echo "[err] No entities returned for seed. Check SEED_IDS/visibility/token."
+  exit 1
+fi
+
+# ====== 2) COLLECT NEIGHBOR IDS ======
+# get both directions; keep only ids we don’t already have
+{
+  jq -r '(.toRelationships // {})|to_entries[]?.value[]?.id' "$OUTDIR/raw/_seed.jsonl"
+  jq -r '(.fromRelationships // {})|to_entries[]?.value[]?.id' "$OUTDIR/raw/_seed.jsonl"
+} | uniq_lines > "$OUTDIR/raw/_neighbor_ids.txt"
+
+# Also include seeds themselves
+printf '%s\n' "${seed_arr[@]}" >> "$OUTDIR/raw/_neighbor_ids.txt"
+
+sort -u "$OUTDIR/raw/_neighbor_ids.txt" -o "$OUTDIR/raw/_neighbor_ids.txt"
+echo "[info] Neighbor id count: $(wc -l < "$OUTDIR/raw/_neighbor_ids.txt" | tr -d ' ')"
+
+# ====== 3) FETCH NEIGHBORS BY ID (in chunks) ======
+: > "$OUTDIR/raw/_all.jsonl"
+while true; do
+  mapfile -t chunk < <(sed '1,20!d' "$OUTDIR/raw/_neighbor_ids.txt" 2>/dev/null || true)
+  [[ "${#chunk[@]}" -eq 0 ]] && break
+  # remove the first 20 lines from file
+  sed -i '' -e '1,20d' "$OUTDIR/raw/_neighbor_ids.txt" 2>/dev/null || sed -e '1,20d' -i "$OUTDIR/raw/_neighbor_ids.txt"
+
+  # build selector for chunk
+  sel=""
+  for id in "${chunk[@]}"; do
+    [[ -n "$sel" ]] && sel+=","
+    sel+="entityId(\"$id\")"
+  done
+  echo "[info] Fetching chunk of ${#chunk[@]} ids"
+  fetch_by_selector "$sel" "$OUTDIR/raw/_chunk.jsonl"
+  cat "$OUTDIR/raw/_chunk.jsonl" >> "$OUTDIR/raw/_all.jsonl"
+done
+
+# De-dup entities
+jq -c '.' "$OUTDIR/raw/_seed.jsonl" "$OUTDIR/raw/_all.jsonl" | jq -sc 'unique_by(.entityId)[]' > "$OUTDIR/raw/entities.jsonl"
+
+echo "[ok] Total unique entities: $(wc -l < "$OUTDIR/raw/entities.jsonl" | tr -d ' ')"
+
+# ====== 4) BUILD nodes.csv / edges.csv ======
+printf 'id,type,name,zone,tags\n' > "$OUTDIR/nodes.csv"
+jq -r '
+  . as $e |
+  [
+    $e.entityId,
+    $e.type,
+    ($e.displayName // $e.entityId),
+    (([$e.managementZones[]?.name] | join("|")) // ""),
+    (([$e.tags[]?.stringRepresentation] | join("|")) // "")
+  ] | @csv
+' "$OUTDIR/raw/entities.jsonl" >> "$OUTDIR/nodes.csv"
+
+printf 'srcId,rel,dstId\n' > "$OUTDIR/edges.csv"
+jq -r '
+  . as $e |
+  ($e.toRelationships // {}) | to_entries[]? as $t
+  | $t.value[]? | [$e.entityId, $t.key, .id] | @csv
+' "$OUTDIR/raw/entities.jsonl" >> "$OUTDIR/edges.csv"
+jq -r '
+  . as $e |
+  ($e.fromRelationships // {}) | to_entries[]? as $t
+  | $t.value[]? | [.id, $t.key, $e.entityId] | @csv
+' "$OUTDIR/raw/entities.jsonl" >> "$OUTDIR/edges.csv"
+
+echo "[ok] nodes.csv and edges.csv written."
+
+# ====== 5) DRAW.IO (no associative arrays) ======
+# build columns array from COL_ORDER
+IFS=',' read -r -a cols <<< "$COL_ORDER"
+get_col_index() {
+  local t="$1"
+  local i
+  for i in "${!cols[@]}"; do [[ "${cols[$i]}" == "$t" ]] && { echo "$i"; return; }; done
+  echo 0
+}
+
+# Sort nodes into per-column temp files
+for t in "${cols[@]}"; do : > "$OUTDIR/.col_${t}.csv"; done
+# skip header
+tail -n +2 "$OUTDIR/nodes.csv" | while IFS=, read -r id type name zone tags; do
+  type="${type%\"}"; type="${type#\"}"
+  out="$OUTDIR/.col_${type}.csv"
+  if [[ -f "$out" ]]; then echo "$id,$type,$name,$zone,$tags" >> "$out"; fi
+done
+for t in "${cols[@]}"; do sort -t, -k3,3 "$OUTDIR/.col_${t}.csv" -o "$OUTDIR/.col_${t}.csv" || true; done
+
+# Enrich to JSON with coordinates
+tmp_nodes="$OUTDIR/.nodes.enriched.jsonl"; : > "$tmp_nodes"
+for t in "${cols[@]}"; do
+  row=0
+  while IFS=, read -r id type name zone tags; do
+    [[ -z "${id:-}" ]] && continue
+    id="${id%\"}"; id="${id#\"}"; type="${type%\"}"; type="${type#\"}"
+    name="${name%\"}"; name="${name#\"}"
+    col_idx="$(get_col_index "$type")"
+    x=$(( PAD_X + col_idx * GUTTER_X ))
+    y=$(( PAD_Y + row * (GUTTER_Y + NODE_H) ))
+    printf '{"id":"%s","name":"%s","type":"%s","x":%d,"y":%d}\n' \
+      "$id" "$(printf '%s' "$name" | sed 's/"/\\"/g')" "$type" "$x" "$y" >> "$tmp_nodes"
+    row=$((row+1))
+  done < "$OUTDIR/.col_${t}.csv"
+done
+
+xml="$OUTDIR/topology.drawio"
+{
+  echo '<mxfile host="DynatraceExporter" modified="'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'" agent="bash" version="22.0.0">'
+  echo '  <diagram name="Dynatrace Topology">'
+  echo '    <mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+} > "$xml"
+
+while read -r line; do
+  id=$(jq -r '.id' <<<"$line")
+  name=$(jq -r '.name' <<<"$line")
+  type=$(jq -r '.type' <<<"$line")
+  x=$(jq -r '.x' <<<"$line")
+  y=$(jq -r '.y' <<<"$line")
+  label="${name//&/&amp;}"; label="${label//</&lt;}"; label="${label//>/&gt;}"; label="${label//\"/&quot;}"
+  echo "      <mxCell id=\"$id\" value=\"$label&#10;($type)\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"$x\" y=\"$y\" width=\"$NODE_W\" height=\"$NODE_H\" as=\"geometry\"/></mxCell>"
+done < "$tmp_nodes" >> "$xml"
+
+# Build node set for edge validation
+mapfile -t NODE_IDS < <(jq -r '.id' "$tmp_nodes")
+while IFS=, read -r src rel dst; do
+  [[ "$src" == "srcId" ]] && continue
+  src="${src%\"}"; src="${src#\"}"; dst="${dst%\"}"; dst="${dst#\"}"
+  if printf '%s\n' "${NODE_IDS[@]}" | grep -qx "$src" && printf '%s\n' "${NODE_IDS[@]}" | grep -qx "$dst"; then
+    elabel="${rel//&/&amp;}"; elabel="${elabel//</&lt;}"; elabel="${elabel//>/&gt;}"; elabel="${elabel//\"/&quot;}"
+    echo "      <mxCell id=\"e-${src}-${dst}\" value=\"$elabel\" edge=\"1\" parent=\"1\" source=\"$src\" target=\"$dst\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>"
+  fi
+done < "$OUTDIR/edges.csv" >> "$xml"
+
+echo '    </root></mxGraphModel></diagram></mxfile>' >> "$xml"
+
+# Cleanup temps
+rm -f "$OUTDIR"/.col_*.csv "$OUTDIR/.nodes.enriched.jsonl" || true
+
+echo "[ok] Wrote:"
+echo " - $OUTDIR/raw/entities.jsonl"
+echo " - $OUTDIR/nodes.csv"
+echo " - $OUTDIR/edges.csv"
+echo " - $OUTDIR/topology.drawio (open in draw.io → Arrange → Layout)"
