@@ -453,3 +453,4 @@ main() {
 }
 
 main "$@"
+https://dynatrace.godigit.com/e/7bc76e8d-f3c2-4c06-ba65-02b4e2449fb8/#smartscape;id=MOBILE_APPLICATION-5AD84A50E1B5405F;gtf=-2h;gf=all
