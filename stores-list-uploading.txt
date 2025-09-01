@@ -1,0 +1,95 @@
+Publishing your Android app on additional OEM app stores (Samsung Galaxy Store, Xiaomi GetApps, OPPO App Market and vivo V‑Appstore)
+
+The Google Play Store is the primary Android distribution channel, but major Chinese and Asian device makers operate their own app stores.  Registering your app on these OEM stores helps you reach millions of additional users, especially in markets where Google Play may be unavailable or where users prefer the manufacturer’s store.  The table below summarises the processes and important details for publishing an app on Samsung, Xiaomi, OPPO and vivo stores (all dates and times are given for Asia/Kolkata time, which currently corresponds to UTC +05:30).
+
+1 Samsung Galaxy Store
+
+Key benefits
+	•	Large installed base and curated environment – Samsung ships tens of millions of Galaxy devices annually.  Listing on Galaxy Store gives your app direct exposure to these devices without the competition and ranking complexities of Google Play.  The Galaxy Store also features curated collections and promotions that can dramatically increase visibility.
+	•	Improved revenue share – In March 2025 Samsung announced that it would increase the developer revenue share from 70/30 to 80/20 for apps/games and consumable in‑app items (developers receive 80 % and Samsung retains 20 %) ￼.  Subscription services enjoy an even better 85/15 share ￼.  The new model applies automatically to developers who have accepted the Galaxy Store Seller Portal terms ￼.
+
+Registration and account setup
+	1.	Create a Samsung account – you need a personal Samsung ID.  Use a company or private domain e‑mail address; free e‑mail domains (e.g., Gmail) are discouraged and may delay approval ￼.
+	2.	Register on Samsung Seller Portal – log in using your Samsung ID and provide personal or business information.  Submit identification documents (passport or company registration) and ensure that your name matches the documentation ￼.  You cannot change the country/region later, so choose carefully.
+	3.	Apply for Commercial Seller status – only commercial sellers can distribute apps or receive payments.  Business developers must provide a D‑U‑N‑S number; individual developers provide national ID details and payment information.  PayPal is the easiest payment method for non‑corporate sellers ￼.  Approval generally takes a few days; verifying a D‑U‑N‑S profile can take up to 10 business days ￼.
+
+App submission process
+	1.	Prepare the app – the Galaxy Store review guidelines require that apps run without crashes, do not contain hidden features or malware, and are not beta builds ￼.  Your metadata (screenshots, description, icon) must accurately represent the app ￼.
+	2.	Create an app entry – in the Seller Portal, click Create App and supply the package name (must match the APK).  Fill in the listing: app name, category, description, price (free or paid), supported countries, content rating, privacy policy URL and other required fields.  Provide 3–8 screenshots and, optionally, a promotional video.
+	3.	Upload the APK or App Bundle – the build must target current Android API levels and comply with Samsung policies.  If you monetise via in‑app purchases, you need to integrate the Samsung In‑App Purchase (IAP) SDK and configure products through the Seller Portal.
+	4.	Submit for review – once all metadata is complete, submit your app.  Samsung performs automated and manual tests to verify functionality, performance, security and policy compliance.  Review times are typically 3–5 working days but may be longer for complex apps or games.  If your app is rejected, you will receive feedback explaining what needs to be fixed.
+	5.	Release and updates – after approval, the app becomes searchable on Galaxy Store.  You can schedule future releases or publish immediately.  Updates follow the same review process.
+
+2 Xiaomi GetApps (Mi Developer platform)
+
+Key benefits
+	•	Extensive global coverage – GetApps is Xiaomi’s official app distribution platform.  Xiaomi states that it serves more than 200 billion downloads worldwide and is available in India, Indonesia, Russia, Spain and dozens of other regions, with expansion planned to over 100 countries ￼.
+	•	Quick, free publishing – developers can create an account for free, upload an APK, select distribution regions and languages, and fill in app information ￼.  Xiaomi provides promotional support and can help apps reach over 100 million active users ￼.  Major brands such as Tokopedia, OYO, JioCinema and Swiggy report substantial increases in user acquisition after publishing on GetApps ￼.
+
+Registration and account setup
+	1.	Create a Mi developer account – register at global.developer.mi.com and upgrade to a corporate or individual developer profile.  Corporate accounts require business licences and corporate bank details; individual accounts need identification documents.
+	2.	Ownership verification – when creating a new app, you must prove ownership of the package name.  If the app already exists on Google Play, you can verify ownership by logging in to the Google account associated with Play and entering the verification code or by signing a Xiaomi‑provided empty APK ￼.
+	3.	Financial information – if your app uses Xiaomi’s GetApps IAP, you must add payment details in the console and agree to the GetApps Merchant Terms.  Xiaomi then remits revenue to your bank account, usually following a 30 % commission, but official documentation should be consulted for current rates.
+
+App submission process
+	1.	Create the app entry – click Create Application and enter the package name or Google Play link ￼.  If your app is on Google Play and does not use in‑app purchases, you can upload the same APK and authorise automatic updates; otherwise you must integrate Xiaomi’s IAP SDK ￼.
+	2.	Fill basic and language information – upload the main APK (package name must match) and any expansion files.  Provide a release name, category, content rating, icon, developer name and contact e‑mail.  For each supported language, supply the app name, a one‑line description, a full description and keywords; all fields must be completed if a language is selected ￼.
+	3.	Ownership authentication – perform the verification method (Google Play e‑mail or signed empty package) to confirm you own the app ￼.
+	4.	Choose distribution regions and release time – GetApps allows you to select among ~110 countries across Asia, Africa, Europe and the Americas and to release immediately or schedule a future date ￼.  You can enable automatic updates and must provide test account credentials if your app requires login ￼.
+	5.	Submit for review – once information is complete, submit the app.  Common rejection reasons include a low version number, inconsistent package name, missing description, fewer than three screenshots or not separating keywords with semicolons ￼.
+	6.	Release and updates – after approval, the app is distributed via GetApps.  Subsequent updates require uploading the new APK, incrementing the version code and resubmitting.
+
+Payment and revenue
+	•	Monetisation – GetApps supports paid apps and in‑app purchases via the GetApps IAP SDK.  Xiaomi’s revenue share has not been publicly disclosed in readily accessible documents; however, third‑party reports suggest that revenue splits are comparable to other Android stores (~70 % to the developer).  Developers must add payment details and sign the Merchant Terms to receive payouts.  Payments are settled to the bank account on file after Xiaomi deducts taxes and commissions.
+
+3 OPPO App Market
+
+Key benefits
+	•	Huge user base and powerful distribution – OPPO’s App Market is pre‑installed on OPPO and realme phones and claims “billion‑level users”; the platform emphasises powerful distribution capabilities and rich traffic resources to help developers reach users ￼.
+	•	Dedicated support – OPPO provides dedicated customer service and a manual test team to help developers with any issues and to ensure apps go online quickly ￼.
+
+Registration and account setup
+	1.	Create an OPPO developer account – register at developers.oppomobile.com.  Personal accounts require identity documents; enterprise accounts need a business licence.  Ensure that your contact details and company name match official documents.
+	2.	Apply for approval – OPPO verifies your identity and company information.  Once approved, you can access the Management Center to create and manage apps.
+
+App submission process
+	1.	Create the app entry – in the App Market section, select App Publishing Process (requires login).  Enter the app’s package name and basic information (name, description, category, price).  If the app already exists on another store, use the same package name to simplify verification.
+	2.	Upload the APK – upload the APK file (size limit ~200 MB) and provide an app icon and 3–8 screenshots.  If you monetise via IAP, integrate the OPPO IAP SDK and configure products through the console.
+	3.	Fill in compliance information – supply a privacy policy, content rating, and confirm compliance with OPPO’s review guidelines (no illegal content, malware, or misleading claims).  Additional documentation may be required for finance, gambling or news apps.
+	4.	Submit for review – OPPO performs an automatic and manual review.  The company states that it provides powerful distribution resources and a manual test team ￼; common issues are flagged for correction.  Review results are typically returned within 1–3 working days.
+	5.	Release and updates – after approval, you can release the app immediately or schedule a release.  New versions follow the same submission steps.
+
+Payment and revenue
+	•	No registration fee – OPPO does not charge a fee to join its developer program.  Revenue splits are not clearly published but are generally comparable to standard Android app stores (around 70 % to the developer).  Payments are made via wire transfer or PayPal after deducting commissions and taxes.
+
+4 vivo V‑Appstore (Global)
+
+Key benefits
+	•	Strong international reach – the vivo V‑Appstore (also called V‑Appstore or V‑App Store) serves vivo devices across Asia (India, Indonesia, Russia, etc.) and parts of Europe and Latin America.  Listing your app here ensures distribution on vivo smartphones where Google Play may not be the default store.
+	•	Open API for automated publishing – vivo offers a REST‑based Publishing API that allows developers to automate app creation, file uploads and submission ￼.
+
+Registration and account setup
+	1.	Become a developer – register for a vivo developer account at developer.vivo.com and complete identity or company verification.  According to the vivo Open API documentation, developers must register and complete the required information before accessing the publishing APIs ￼.
+	2.	Obtain API keys – after registration, request an access key and access secret from the vivo platform or via a business‑development contact ￼.  These credentials are used to sign API requests.
+	3.	Generate a signature – before calling the Publishing API, generate a signature using the access key and secret (HMAC‑SHA256).  This signature is sent with every request to verify your identity ￼.
+
+App submission process (via web console or API)
+	1.	Create the app entry – use the console or call the API method app.create with your package name and other details.  The API example shows how to assemble parameters (method, access_key, timestamp, version and packageName) and sign the request ￼.
+	2.	Upload files – vivo’s API includes endpoints for uploading APK files (app.upload.apk), OBB expansion files, icons, screenshots and other assets.  Each upload requires computing the MD5 hash of the file and ensuring the package name and version code match the app entry.  The documentation notes that you can upload all kinds of app‑related files such as APKs, icons and screenshots and update the general information or language information of your apps ￼.
+	3.	Update metadata – after uploading files, call APIs to update general information (app name, description, category, price) and language‑specific information (title, short description, keywords) as needed.
+	4.	Submit for verification – call the API to submit the app for verification and choose the release method.  Vivo reviews the app for functionality, security and compliance with local regulations.  After approval, the app is published.
+
+Payment and revenue
+	•	Revenue share – vivo’s international revenue‑share model is not publicly disclosed; however, third‑party sources suggest it is similar to other Android OEM stores (approximately 70 % to the developer).  Developers must configure banking details in the console to receive payments.  Vivo supports IAP through its own SDK and may also support third‑party payment channels depending on the region.
+
+General considerations and best practices
+	1.	Content and legal compliance – all OEM stores require compliance with local laws.  Avoid illegal content (e.g., pornography, gambling, hate speech), malware, deceptive behaviour and intellectual‑property infringement.  Provide a clear privacy policy and, where required, user agreements.  Samsung’s guidelines emphasise that apps must not crash, contain hidden features or misrepresent their functionality ￼.
+	2.	App quality – test thoroughly on target devices to ensure good performance, especially regarding battery usage, memory consumption and compatibility.  Stores may reject apps that crash, freeze or drain resources.
+	3.	Metadata accuracy – use the same package name across stores to simplify ownership verification.  Fill in all required fields (app name, short/long descriptions, keywords, category) in each supported language; incomplete language information is a common reason for rejection on Xiaomi GetApps ￼.
+	4.	Prepare documentation – keep copies of your company registration, D‑U‑N‑S number (if applicable), and intellectual‑property certificates.  Chinese stores often require a Software Copyright Certificate and ICP filing when distributing in China; these documents prove ownership and compliance.
+	5.	Consider local services – integrate region‑specific services such as Chinese push‑notification providers (e.g., Mi Push, OPPO Push, vivo Push) and payment methods (Alipay, WeChat Pay) to provide a better user experience.  Some app stores only allow apps that integrate their own IAP SDK (e.g., Xiaomi GetApps and OPPO App Market).
+	6.	Monitoring and updates – after publishing, monitor user feedback and store dashboards.  All stores allow you to update your app by uploading a new APK and resubmitting for review.  Timely updates improve ranking and user satisfaction.
+
+Conclusion
+
+Publishing your app on Samsung Galaxy Store, Xiaomi GetApps, OPPO App Market and vivo V‑Appstore expands your reach into major Asian and global markets.  While the core steps—register an account, upload your app, complete metadata, pass review and release—are similar, each store has unique verification requirements and payment processes.  The cited documentation illustrates that registration generally requires identity or business verification; metadata must be complete in every language; and stores may have specific guidelines for privacy, content and monetisation.  Following these procedures and meeting each platform’s standards will improve your chances of approval and allow your app to tap into these rapidly growing user bases.
